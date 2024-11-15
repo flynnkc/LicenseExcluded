@@ -24,6 +24,11 @@ type RegionalClient struct {
 
 type ClientBundle map[string]RegionalClient
 
+type SearchCollection struct {
+	Items []resourcesearch.ResourceSummary
+	sync.Mutex
+}
+
 func NewRegionalClient(p common.ConfigurationProvider) RegionalClient {
 
 	ac, err := analytics.NewAnalyticsClientWithConfigurationProvider(p)
@@ -67,35 +72,43 @@ func NewClientBundle(p common.ConfigurationProvider, regions []identity.RegionSu
 // ProcessCollection fans out on returned resources
 func (c *ClientBundle) ProcessCollection() {
 
-	r := make([]resourcesearch.ResourceSummary, 0)
-
-	for _, client := range *c {
-		rc := client.Search()
-		r = append(r, rc.Items...)
-	}
-
+	var r SearchCollection
 	var wg sync.WaitGroup
 
-	for _, item := range r {
+	for _, client := range *c {
+		wg.Add(1)
+		go func(client RegionalClient) {
+			defer wg.Done()
+			rc := client.Search()
+
+			r.Lock()
+			defer r.Unlock()
+			r.Items = append(r.Items, rc.Items...)
+		}(client)
+	}
+
+	wg.Wait()
+
+	for _, item := range r.Items {
 		switch *item.ResourceType {
 		case "Database":
-			func() {
-				wg.Add(1)
+			wg.Add(1)
+			go func(item resourcesearch.ResourceSummary) {
 				defer wg.Done()
-				fmt.Println("database", item)
-			}()
+				fmt.Println("Database", item)
+			}(item)
 		case "AutonomousDatabase":
-			func() {
-				wg.Add(1)
+			wg.Add(1)
+			go func(item resourcesearch.ResourceSummary) {
 				defer wg.Done()
 				fmt.Println("AutonomousDatabase", item)
-			}()
+			}(item)
 		case "AnalyticsInstance":
-			func() {
-				wg.Add(1)
+			wg.Add(1)
+			go func(item resourcesearch.ResourceSummary) {
 				defer wg.Done()
 				fmt.Println("AnalyticsInstance", item)
-			}()
+			}(item)
 		default:
 			fmt.Println("Error: No supported type", *item.ResourceType)
 		}
