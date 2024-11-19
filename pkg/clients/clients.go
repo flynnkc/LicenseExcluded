@@ -13,7 +13,8 @@ import (
 	"github.com/oracle/oci-go-sdk/v65/resourcesearch"
 )
 
-const query string = "query database, autonomousdatabase, analyticsinstance resources where lifeCycleState = 'RUNNING' || lifeCycleState = 'STOPPED'"
+const query string = `query dbsystem, autonomousdatabase, analyticsinstance resources
+where lifeCycleState = 'RUNNING' || lifeCycleState = 'STOPPED' || lifeCycleState = 'AVAILABLE'`
 
 type RegionalClient struct {
 	AnalyticsClient analytics.AnalyticsClient
@@ -25,7 +26,7 @@ type RegionalClient struct {
 type ClientBundle map[string]RegionalClient
 
 type SearchCollection struct {
-	Items []resourcesearch.ResourceSummary
+	Items map[string]resourcesearch.ResourceSummaryCollection
 	sync.Mutex
 }
 
@@ -70,47 +71,54 @@ func NewClientBundle(p common.ConfigurationProvider, regions []identity.RegionSu
 }
 
 // ProcessCollection fans out on returned resources
-func (c *ClientBundle) ProcessCollection() {
+func (c ClientBundle) ProcessCollection() {
 
-	var r SearchCollection
 	var wg sync.WaitGroup
 
-	for _, client := range *c {
+	sc := SearchCollection{
+		Items: make(map[string]resourcesearch.ResourceSummaryCollection),
+	}
+
+	for region, client := range c {
 		wg.Add(1)
-		go func(client RegionalClient) {
+		go func(client RegionalClient, region string) {
 			defer wg.Done()
 			rc := client.Search()
 
-			r.Lock()
-			defer r.Unlock()
-			r.Items = append(r.Items, rc.Items...)
-		}(client)
+			sc.Lock()
+			defer sc.Unlock()
+
+			sc.Items[region] = rc
+			//sc.Items = append(r.Items, rc.Items...)
+		}(client, region)
 	}
 
 	wg.Wait()
 
-	for _, item := range r.Items {
-		switch *item.ResourceType {
-		case "Database":
-			wg.Add(1)
-			go func(item resourcesearch.ResourceSummary) {
-				defer wg.Done()
-				fmt.Println("Database", item)
-			}(item)
-		case "AutonomousDatabase":
-			wg.Add(1)
-			go func(item resourcesearch.ResourceSummary) {
-				defer wg.Done()
-				fmt.Println("AutonomousDatabase", item)
-			}(item)
-		case "AnalyticsInstance":
-			wg.Add(1)
-			go func(item resourcesearch.ResourceSummary) {
-				defer wg.Done()
-				fmt.Println("AnalyticsInstance", item)
-			}(item)
-		default:
-			fmt.Println("Error: No supported type", *item.ResourceType)
+	for region, items := range sc.Items {
+		for _, item := range items.Items {
+			switch *item.ResourceType {
+			case "DbSystem":
+				wg.Add(1)
+				go func(item resourcesearch.ResourceSummary, region string) {
+					defer wg.Done()
+					fmt.Println("DBSystem", region, item)
+				}(item, region)
+			case "AutonomousDatabase":
+				wg.Add(1)
+				go func(item resourcesearch.ResourceSummary, region string) {
+					defer wg.Done()
+					c[region].handleAutonomousDatabase(item)
+				}(item, region)
+			case "AnalyticsInstance":
+				wg.Add(1)
+				go func(item resourcesearch.ResourceSummary, region string) {
+					defer wg.Done()
+					fmt.Println("AnalyticsInstance", region, item)
+				}(item, region)
+			default:
+				fmt.Println("Error: No supported type", *item.ResourceType)
+			}
 		}
 	}
 
@@ -132,7 +140,6 @@ func (c *RegionalClient) Search() resourcesearch.ResourceSummaryCollection {
 	response, err := c.SearchClient.SearchResources(context.Background(), request)
 	logErrAndContinue(err)
 
-	fmt.Printf("Items returned: %v\n", len(response.ResourceSummaryCollection.Items))
 	return response.ResourceSummaryCollection
 }
 
@@ -171,6 +178,42 @@ func constructConfigurationProvider(region string, provider common.Configuration
 	provider = common.NewRawConfigurationProvider(tenancy, user, region, fingerprint, pk, &passphrase)
 
 	return &provider, nil
+}
+
+func (c RegionalClient) handleAutonomousDatabase(adb resourcesearch.ResourceSummary) {
+	fmt.Printf("Handling Autonomous Database %v\n", *adb.Identifier)
+	request := database.GetAutonomousDatabaseRequest{
+		AutonomousDatabaseId: adb.Identifier,
+	}
+	response, err := c.DatabaseClient.GetAutonomousDatabase(context.Background(), request)
+	if err != nil {
+		fmt.Printf("Error handling Autonomous Database %v, %v\n", *adb.Identifier, err)
+		return
+	}
+
+	if *response.AutonomousDatabase.IsFreeTier {
+		return
+	}
+
+	if response.AutonomousDatabase.LicenseModel == database.AutonomousDatabaseLicenseModelLicenseIncluded {
+		fmt.Printf("%v - Changing from License Included to BYOL\n", *adb.Identifier)
+		req := database.UpdateAutonomousDatabaseRequest{
+			AutonomousDatabaseId: adb.Identifier,
+			UpdateAutonomousDatabaseDetails: database.UpdateAutonomousDatabaseDetails{
+				LicenseModel:    database.UpdateAutonomousDatabaseDetailsLicenseModelBringYourOwnLicense,
+				DatabaseEdition: database.AutonomousDatabaseSummaryDatabaseEditionEnterpriseEdition,
+			},
+		}
+
+		resp, err := c.DatabaseClient.UpdateAutonomousDatabase(context.Background(), req)
+		if err != nil {
+			fmt.Printf("Error updating Autonomous Database %v, %v\n", *adb.Identifier, err)
+		} else if resp.RawResponse.StatusCode != 200 {
+			fmt.Printf("Non-200 status code returned %v\n", resp.RawResponse.StatusCode)
+		} else {
+			fmt.Printf("Updated Autonomous Database %v\n", *adb.Identifier)
+		}
+	}
 }
 
 // Logs error if not nil and moves on without stopping execution
