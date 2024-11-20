@@ -13,8 +13,9 @@ import (
 	"github.com/oracle/oci-go-sdk/v65/resourcesearch"
 )
 
-const query string = `query dbsystem, autonomousdatabase, autonomouscontainerdatabase, analyticsinstance resources
-where lifeCycleState = 'RUNNING' || lifeCycleState = 'STOPPED' || lifeCycleState = 'AVAILABLE'`
+const query string = `query dbsystem, autonomousdatabase, analyticsinstance resources
+where lifeCycleState = 'RUNNING' || lifeCycleState = 'STOPPED' || lifeCycleState = 'AVAILABLE' 
+|| lifeCycleState = 'ACTIVE' || lifeCycleState = 'INACTIVE'`
 
 type RegionalClient struct {
 	AnalyticsClient analytics.AnalyticsClient
