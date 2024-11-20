@@ -102,7 +102,7 @@ func (c ClientBundle) ProcessCollection() {
 				wg.Add(1)
 				go func(item resourcesearch.ResourceSummary, region string) {
 					defer wg.Done()
-					fmt.Println("DBSystem", region, item)
+					c[region].handleDbSystem(item)
 				}(item, region)
 			case "AutonomousDatabase":
 				wg.Add(1)
@@ -191,6 +191,7 @@ func (c RegionalClient) handleAutonomousDatabase(adb resourcesearch.ResourceSumm
 		return
 	}
 
+	// Exclusive to Autonomous Database
 	if *response.AutonomousDatabase.IsFreeTier {
 		return
 	}
@@ -209,9 +210,40 @@ func (c RegionalClient) handleAutonomousDatabase(adb resourcesearch.ResourceSumm
 		if err != nil {
 			fmt.Printf("Error updating Autonomous Database %v, %v\n", *adb.Identifier, err)
 		} else if resp.RawResponse.StatusCode != 200 {
-			fmt.Printf("Non-200 status code returned %v\n", resp.RawResponse.StatusCode)
+			fmt.Printf("Non-200 status code returned %v - %v\n", resp.RawResponse.StatusCode, *adb.Identifier)
 		} else {
 			fmt.Printf("Updated Autonomous Database %v\n", *adb.Identifier)
+		}
+	}
+}
+
+func (c RegionalClient) handleDbSystem(db resourcesearch.ResourceSummary) {
+	fmt.Printf("Handling DBSystem %v\n", *db.Identifier)
+	request := database.GetDbSystemRequest{
+		DbSystemId: db.Identifier,
+	}
+
+	response, err := c.DatabaseClient.GetDbSystem(context.Background(), request)
+	if err != nil {
+		fmt.Printf("Error handling DBSystem %v, %v\n", *db.Identifier, err)
+		return
+	}
+
+	if response.DbSystem.LicenseModel == database.DbSystemLicenseModelLicenseIncluded {
+		req := database.UpdateDbSystemRequest{
+			DbSystemId: db.Identifier,
+			UpdateDbSystemDetails: database.UpdateDbSystemDetails{
+				LicenseModel: database.UpdateDbSystemDetailsLicenseModelBringYourOwnLicense,
+			},
+		}
+
+		resp, err := c.DatabaseClient.UpdateDbSystem(context.Background(), req)
+		if err != nil {
+			fmt.Printf("Error updating DBSystem %v, %v\n", *db.Identifier, err)
+		} else if resp.RawResponse.StatusCode != 200 {
+			fmt.Printf("Non-200 status code returned %v - %v\n", resp.RawResponse.StatusCode, *db.Identifier)
+		} else {
+			fmt.Printf("Updated DBSystem %v\n", *db.Identifier)
 		}
 	}
 }
