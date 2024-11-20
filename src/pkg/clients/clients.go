@@ -13,7 +13,7 @@ import (
 	"github.com/oracle/oci-go-sdk/v65/resourcesearch"
 )
 
-const query string = `query dbsystem, autonomousdatabase, analyticsinstance resources
+const query string = `query dbsystem, autonomousdatabase, autonomouscontainerdatabase, analyticsinstance resources
 where lifeCycleState = 'RUNNING' || lifeCycleState = 'STOPPED' || lifeCycleState = 'AVAILABLE'`
 
 type RegionalClient struct {
@@ -114,7 +114,7 @@ func (c ClientBundle) ProcessCollection() {
 				wg.Add(1)
 				go func(item resourcesearch.ResourceSummary, region string) {
 					defer wg.Done()
-					fmt.Println("AnalyticsInstance", region, item)
+					c[region].handleAnalyticsInstance(item)
 				}(item, region)
 			default:
 				fmt.Println("Error: No supported type", *item.ResourceType)
@@ -230,6 +230,7 @@ func (c RegionalClient) handleDbSystem(db resourcesearch.ResourceSummary) {
 	}
 
 	if response.DbSystem.LicenseModel == database.DbSystemLicenseModelLicenseIncluded {
+		fmt.Printf("%v - Changing from License Included to BYOL\n", *db.Identifier)
 		req := database.UpdateDbSystemRequest{
 			DbSystemId: db.Identifier,
 			UpdateDbSystemDetails: database.UpdateDbSystemDetails{
@@ -244,6 +245,38 @@ func (c RegionalClient) handleDbSystem(db resourcesearch.ResourceSummary) {
 			fmt.Printf("Non-200 status code returned %v - %v\n", resp.RawResponse.StatusCode, *db.Identifier)
 		} else {
 			fmt.Printf("Updated DBSystem %v\n", *db.Identifier)
+		}
+	}
+}
+
+func (c RegionalClient) handleAnalyticsInstance(ai resourcesearch.ResourceSummary) {
+	fmt.Printf("Handling Analytics Instance %v\n", *ai.Identifier)
+	request := analytics.GetAnalyticsInstanceRequest{
+		AnalyticsInstanceId: ai.Identifier,
+	}
+
+	response, err := c.AnalyticsClient.GetAnalyticsInstance(context.Background(), request)
+	if err != nil {
+		fmt.Printf("Error handling AnalyticsInstance %v, %v\n", *ai.Identifier, err)
+		return
+	}
+
+	if response.AnalyticsInstance.LicenseType == analytics.LicenseTypeLicenseIncluded {
+		fmt.Printf("%v - Changing from License Included to BYOL\n", *ai.Identifier)
+		req := analytics.UpdateAnalyticsInstanceRequest{
+			AnalyticsInstanceId: ai.Identifier,
+			UpdateAnalyticsInstanceDetails: analytics.UpdateAnalyticsInstanceDetails{
+				LicenseType: analytics.LicenseTypeBringYourOwnLicense,
+			},
+		}
+
+		resp, err := c.AnalyticsClient.UpdateAnalyticsInstance(context.Background(), req)
+		if err != nil {
+			fmt.Printf("Error updating AnalyticsInstance %v, %v\n", *ai.Identifier, err)
+		} else if resp.RawResponse.StatusCode != 200 {
+			fmt.Printf("Non-200 status code returned %v - %v\n", resp.RawResponse.StatusCode, *ai.Identifier)
+		} else {
+			fmt.Printf("Updated AnalyticsInstance %v\n", *ai.Identifier)
 		}
 	}
 }
