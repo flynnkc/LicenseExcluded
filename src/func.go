@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"func/pkg/clients"
 	"func/pkg/logging"
+	"func/pkg/results"
 	"io"
 	"os"
 
@@ -13,10 +14,6 @@ import (
 	"github.com/oracle/oci-go-sdk/v65/common/auth"
 	"github.com/oracle/oci-go-sdk/v65/identity"
 )
-
-type Message struct {
-	Msg string `json:"message"`
-}
 
 func main() {
 	fdk.Handle(fdk.HandlerFunc(myHandler))
@@ -62,16 +59,13 @@ func myHandler(ctx context.Context, in io.Reader, out io.Writer) {
 		return
 	}
 
-	clients.NewClientBundle(provider, regions.Items).ProcessCollection()
+	msg := clients.NewClientBundle(provider, regions.Items).ProcessCollection()
 
-	msg := Message{
-		Msg: "LicenseExcluded invoke complete",
-	}
-	json.NewEncoder(out).Encode(&msg)
+	json.NewEncoder(out).Encode(msg)
 }
 
 func sendError(out io.Writer, message string) {
-	msg := Message{Msg: message}
+	msg := results.Result{Error: message}
 
 	json.NewEncoder(out).Encode(&msg)
 }

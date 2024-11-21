@@ -3,6 +3,7 @@ package clients
 import (
 	"context"
 	"func/pkg/logging"
+	"func/pkg/results"
 	"os"
 	"sync"
 
@@ -74,7 +75,7 @@ func NewClientBundle(p common.ConfigurationProvider, regions []identity.RegionSu
 }
 
 // ProcessCollection fans out on returned resources
-func (c ClientBundle) ProcessCollection() {
+func (c ClientBundle) ProcessCollection() *results.Result {
 	logger.Debug("Processing resource collection")
 
 	var wg sync.WaitGroup
@@ -82,12 +83,13 @@ func (c ClientBundle) ProcessCollection() {
 	sc := SearchCollection{
 		Items: make(map[string]resourcesearch.ResourceSummaryCollection),
 	}
+	result := results.NewResult()
 
 	logger.Debugf("Searching for resources with query: %s\n", query)
 	for region, client := range c {
 		logger.Debug("Searching in", region)
 		wg.Add(1)
-		go func(client RegionalClient, region string) {
+		go func(client RegionalClient, region string, result *results.Result) {
 			defer wg.Done()
 			rc := client.Search()
 			logger.Infof("Found %v resources in %v\n", len(rc.Items), region)
@@ -96,8 +98,8 @@ func (c ClientBundle) ProcessCollection() {
 			defer sc.Unlock()
 
 			sc.Items[region] = rc
-			//sc.Items = append(r.Items, rc.Items...)
-		}(client, region)
+			result.AddItemsFound(len(rc.Items))
+		}(client, region, &result)
 	}
 	logger.Debugf("Assembled resource collection: %v", sc.Items)
 
@@ -108,22 +110,31 @@ func (c ClientBundle) ProcessCollection() {
 			switch *item.ResourceType {
 			case "DbSystem":
 				wg.Add(1)
-				go func(item resourcesearch.ResourceSummary, region string) {
+				go func(item resourcesearch.ResourceSummary, region string, result *results.Result) {
 					defer wg.Done()
-					c[region].handleDbSystem(item)
-				}(item, region)
+					if c[region].handleDbSystem(item) {
+						result.AddChanges(1)
+					}
+				}(item, region, &result)
+
 			case "AutonomousDatabase":
 				wg.Add(1)
-				go func(item resourcesearch.ResourceSummary, region string) {
+				go func(item resourcesearch.ResourceSummary, region string, result *results.Result) {
 					defer wg.Done()
-					c[region].handleAutonomousDatabase(item)
-				}(item, region)
+					if c[region].handleAutonomousDatabase(item) {
+						result.AddChanges(1)
+					}
+				}(item, region, &result)
+
 			case "AnalyticsInstance":
 				wg.Add(1)
-				go func(item resourcesearch.ResourceSummary, region string) {
+				go func(item resourcesearch.ResourceSummary, region string, result *results.Result) {
 					defer wg.Done()
-					c[region].handleAnalyticsInstance(item)
-				}(item, region)
+					if c[region].handleAnalyticsInstance(item) {
+						result.AddChanges(1)
+					}
+				}(item, region, &result)
+
 			default:
 				logger.Warn("Error: No supported type", *item.ResourceType)
 			}
@@ -131,6 +142,10 @@ func (c ClientBundle) ProcessCollection() {
 	}
 
 	wg.Wait()
+
+	result.SetMessage("LicenseExcluded invoke complete")
+
+	return &result
 }
 
 // Search uses the search client to find resources.
@@ -151,7 +166,9 @@ func (c *RegionalClient) Search() resourcesearch.ResourceSummaryCollection {
 	return response.ResourceSummaryCollection
 }
 
-func (c RegionalClient) handleAutonomousDatabase(adb resourcesearch.ResourceSummary) {
+// handlers check for license type and change if incorrect license is found. Returns
+// true to signal that a change was made.
+func (c RegionalClient) handleAutonomousDatabase(adb resourcesearch.ResourceSummary) bool {
 	logger.Debugf("Handling Autonomous Database %v\n", *adb.Identifier)
 	request := database.GetAutonomousDatabaseRequest{
 		AutonomousDatabaseId: adb.Identifier,
@@ -159,13 +176,13 @@ func (c RegionalClient) handleAutonomousDatabase(adb resourcesearch.ResourceSumm
 	response, err := c.DatabaseClient.GetAutonomousDatabase(context.Background(), request)
 	if err != nil {
 		logger.Errorf("Error handling Autonomous Database %v, %v\n", *adb.Identifier, err)
-		return
+		return false
 	}
 
 	// Exclusive to Autonomous Database
 	if *response.AutonomousDatabase.IsFreeTier {
 		logger.Debugf("%v is free tier, skipping", *adb.Identifier)
-		return
+		return false
 	}
 
 	if response.AutonomousDatabase.LicenseModel == database.AutonomousDatabaseLicenseModelLicenseIncluded {
@@ -185,11 +202,13 @@ func (c RegionalClient) handleAutonomousDatabase(adb resourcesearch.ResourceSumm
 			logger.Errorf("Non-200 status code returned %v - %v\n", resp.RawResponse.Status, *adb.Identifier)
 		} else {
 			logger.Infof("Updated Autonomous Database %v\n", *adb.Identifier)
+			return true
 		}
 	}
+	return false
 }
 
-func (c RegionalClient) handleDbSystem(db resourcesearch.ResourceSummary) {
+func (c RegionalClient) handleDbSystem(db resourcesearch.ResourceSummary) bool {
 	logger.Debugf("Handling DBSystem %v\n", *db.Identifier)
 	request := database.GetDbSystemRequest{
 		DbSystemId: db.Identifier,
@@ -198,7 +217,7 @@ func (c RegionalClient) handleDbSystem(db resourcesearch.ResourceSummary) {
 	response, err := c.DatabaseClient.GetDbSystem(context.Background(), request)
 	if err != nil {
 		logger.Errorf("Error handling DBSystem %v, %v\n", *db.Identifier, err)
-		return
+		return false
 	}
 
 	if response.DbSystem.LicenseModel == database.DbSystemLicenseModelLicenseIncluded {
@@ -217,11 +236,13 @@ func (c RegionalClient) handleDbSystem(db resourcesearch.ResourceSummary) {
 			logger.Errorf("Non-200 status code returned %v - %v\n", resp.RawResponse.Status, *db.Identifier)
 		} else {
 			logger.Infof("Updated DBSystem %v\n", *db.Identifier)
+			return true
 		}
 	}
+	return false
 }
 
-func (c RegionalClient) handleAnalyticsInstance(ai resourcesearch.ResourceSummary) {
+func (c RegionalClient) handleAnalyticsInstance(ai resourcesearch.ResourceSummary) bool {
 	logger.Debugf("Handling Analytics Instance %v\n", *ai.Identifier)
 	request := analytics.GetAnalyticsInstanceRequest{
 		AnalyticsInstanceId: ai.Identifier,
@@ -230,7 +251,7 @@ func (c RegionalClient) handleAnalyticsInstance(ai resourcesearch.ResourceSummar
 	response, err := c.AnalyticsClient.GetAnalyticsInstance(context.Background(), request)
 	if err != nil {
 		logger.Errorf("Error handling AnalyticsInstance %v, %v\n", *ai.Identifier, err)
-		return
+		return false
 	}
 
 	if response.AnalyticsInstance.LicenseType == analytics.LicenseTypeLicenseIncluded {
@@ -249,8 +270,10 @@ func (c RegionalClient) handleAnalyticsInstance(ai resourcesearch.ResourceSummar
 			logger.Errorf("Non-200 status code returned %v - %v\n", resp.RawResponse.Status, *ai.Identifier)
 		} else {
 			logger.Infof("Updated AnalyticsInstance %v\n", *ai.Identifier)
+			return true
 		}
 	}
+	return false
 }
 
 // Logs error if not nil and moves on without stopping execution
