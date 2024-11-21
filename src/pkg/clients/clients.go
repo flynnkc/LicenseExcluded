@@ -3,11 +3,11 @@ package clients
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 
 	"github.com/oracle/oci-go-sdk/v65/analytics"
 	"github.com/oracle/oci-go-sdk/v65/common"
+	"github.com/oracle/oci-go-sdk/v65/common/auth"
 	"github.com/oracle/oci-go-sdk/v65/database"
 	"github.com/oracle/oci-go-sdk/v65/identity"
 	"github.com/oracle/oci-go-sdk/v65/resourcesearch"
@@ -59,13 +59,13 @@ func NewClientBundle(p common.ConfigurationProvider, regions []identity.RegionSu
 	cb := make(ClientBundle)
 
 	for _, r := range regions {
-		newProvider, err := constructConfigurationProvider(*r.RegionName, p)
+		newProvider, err := auth.ResourcePrincipalConfigurationProviderForRegion(common.StringToRegion(*r.RegionName))
 		if err != nil {
 			fmt.Println("Error creating provider:", err)
 			continue
 		}
 
-		cb[*r.RegionName] = NewRegionalClient(*newProvider)
+		cb[*r.RegionName] = NewRegionalClient(newProvider)
 	}
 
 	return cb
@@ -142,43 +142,6 @@ func (c *RegionalClient) Search() resourcesearch.ResourceSummaryCollection {
 	logErrAndContinue(err)
 
 	return response.ResourceSummaryCollection
-}
-
-func constructConfigurationProvider(region string, provider common.ConfigurationProvider) (*common.ConfigurationProvider, error) {
-	tenancy, err := provider.TenancyOCID()
-	if err != nil {
-		return nil, err
-	}
-
-	user, err := provider.UserOCID()
-	if err != nil {
-		return nil, err
-	}
-
-	fingerprint, err := provider.KeyFingerprint()
-	if err != nil {
-		return nil, err
-	}
-
-	passphrase := ""
-
-	/*
-		// Get key into string
-		key, err := provider.PrivateRSAKey()
-		if err != nil {
-			return nil, err
-		}
-
-		pk := string(x509.MarshalPKCS1PrivateKey(key))
-	*/
-
-	pb, err := os.ReadFile(os.Getenv("KC_KEY"))
-	logErrAndContinue(err)
-	pk := string(pb)
-
-	provider = common.NewRawConfigurationProvider(tenancy, user, region, fingerprint, pk, &passphrase)
-
-	return &provider, nil
 }
 
 func (c RegionalClient) handleAutonomousDatabase(adb resourcesearch.ResourceSummary) {
