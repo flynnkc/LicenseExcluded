@@ -182,9 +182,9 @@ func (c RegionalClient) handleAutonomousDatabase(adb resourcesearch.ResourceSumm
 		if err != nil {
 			logger.Errorf("Error updating Autonomous Database %v, %v\n", *adb.Identifier, err)
 		} else if resp.RawResponse.StatusCode != 200 {
-			logger.Errorf("Non-200 status code returned %v - %v\n", resp.RawResponse.StatusCode, *adb.Identifier)
+			logger.Errorf("Non-200 status code returned %v - %v\n", resp.RawResponse.Status, *adb.Identifier)
 		} else {
-			logger.Errorf("Updated Autonomous Database %v\n", *adb.Identifier)
+			logger.Infof("Updated Autonomous Database %v\n", *adb.Identifier)
 		}
 	}
 }
@@ -214,9 +214,9 @@ func (c RegionalClient) handleDbSystem(db resourcesearch.ResourceSummary) {
 		if err != nil {
 			logger.Errorf("Error updating DBSystem %v, %v\n", *db.Identifier, err)
 		} else if resp.RawResponse.StatusCode != 200 {
-			logger.Errorf("Non-200 status code returned %v - %v\n", resp.RawResponse.StatusCode, *db.Identifier)
+			logger.Errorf("Non-200 status code returned %v - %v\n", resp.RawResponse.Status, *db.Identifier)
 		} else {
-			logger.Errorf("Updated DBSystem %v\n", *db.Identifier)
+			logger.Infof("Updated DBSystem %v\n", *db.Identifier)
 		}
 	}
 }
@@ -246,9 +246,9 @@ func (c RegionalClient) handleAnalyticsInstance(ai resourcesearch.ResourceSummar
 		if err != nil {
 			logger.Errorf("Error updating AnalyticsInstance %v, %v\n", *ai.Identifier, err)
 		} else if resp.RawResponse.StatusCode != 200 {
-			logger.Errorf("Non-200 status code returned %v - %v\n", resp.RawResponse.StatusCode, *ai.Identifier)
+			logger.Errorf("Non-200 status code returned %v - %v\n", resp.RawResponse.Status, *ai.Identifier)
 		} else {
-			logger.Errorf("Updated AnalyticsInstance %v\n", *ai.Identifier)
+			logger.Infof("Updated AnalyticsInstance %v\n", *ai.Identifier)
 		}
 	}
 }
