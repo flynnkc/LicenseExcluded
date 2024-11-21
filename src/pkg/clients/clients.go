@@ -85,7 +85,7 @@ func (c ClientBundle) ProcessCollection() {
 
 	logger.Debugf("Searching for resources with query: %s\n", query)
 	for region, client := range c {
-		logger.Info("Searching in", region)
+		logger.Debug("Searching in", region)
 		wg.Add(1)
 		go func(client RegionalClient, region string) {
 			defer wg.Done()
