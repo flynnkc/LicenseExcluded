@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"func/pkg/clients"
+	"func/pkg/logging"
 	"io"
+	"os"
 
 	"github.com/fnproject/fdk-go"
 	"github.com/oracle/oci-go-sdk/v65/common/auth"
@@ -21,21 +23,29 @@ func main() {
 }
 
 func myHandler(ctx context.Context, in io.Reader, out io.Writer) {
+	logger := logging.NewLogger(os.Getenv("LOG_LEVEL"))
+
 	provider, err := auth.ResourcePrincipalConfigurationProvider()
 	if err != nil {
-		sendError(out, fmt.Sprintf("Error getting Resource Principal provider: %v", err))
+		s := fmt.Sprintf("Error getting Resource Principal provider: %v", err)
+		logger.Critical(s)
+		sendError(out, s)
 		return
 	}
 
 	c, err := identity.NewIdentityClientWithConfigurationProvider(provider)
 	if err != nil {
-		sendError(out, fmt.Sprintf("Error getting Identity client: %v", err))
+		s := fmt.Sprintf("Error getting Identity client: %v", err)
+		logger.Critical(s)
+		sendError(out, s)
 		return
 	}
 
 	tenantOcid, err := provider.TenancyOCID()
 	if err != nil {
-		sendError(out, fmt.Sprintf("Error getting tenant OCID: %v", err))
+		s := fmt.Sprintf("Error getting tenant OCID: %v", err)
+		logger.Critical(s)
+		sendError(out, s)
 		return
 	}
 
@@ -46,7 +56,9 @@ func myHandler(ctx context.Context, in io.Reader, out io.Writer) {
 		},
 	)
 	if err != nil {
-		sendError(out, fmt.Sprintf("Error getting regions subscription: %v", err))
+		s := fmt.Sprintf("Error getting regions subscription: %v", err)
+		logger.Critical(s)
+		sendError(out, s)
 		return
 	}
 
