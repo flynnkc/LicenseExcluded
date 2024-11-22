@@ -1,2 +1,7 @@
 *.log
 .DS_Store
+.terraform
+*.hcl
+terraform.tfvars
+*.tfstate*
+tf.plan
