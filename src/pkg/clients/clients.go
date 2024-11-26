@@ -19,6 +19,10 @@ const query string = `query dbsystem, autonomousdatabase, analyticsinstance reso
 where lifeCycleState = 'RUNNING' || lifeCycleState = 'STOPPED' || lifeCycleState = 'AVAILABLE' 
 || lifeCycleState = 'ACTIVE' || lifeCycleState = 'INACTIVE'`
 
+// Can find license information in allAdditionalFields
+const DbQuery string = `query dbsystem  resources return allAdditionalFields
+where lifeCycleState = 'AVAILABLE' && licenseType = 'LICENSE_INCLUDED'`
+
 var logger logging.Lumberjack = logging.NewLogger(os.Getenv("LOG_LEVEL"))
 
 type RegionalClient struct {
@@ -151,19 +155,25 @@ func (c ClientBundle) ProcessCollection() *results.Result {
 // Search uses the search client to find resources.
 func (c *RegionalClient) Search() resourcesearch.ResourceSummaryCollection {
 
-	details := resourcesearch.StructuredSearchDetails{
-		Query: common.String(query),
+	result := resourcesearch.ResourceSummaryCollection{Items: make([]resourcesearch.ResourceSummary, 0)}
+
+	for _, q := range []string{query, DbQuery} {
+		details := resourcesearch.StructuredSearchDetails{
+			Query: common.String(q),
+		}
+
+		request := resourcesearch.SearchResourcesRequest{
+			SearchDetails: details,
+			Limit:         common.Int(1000),
+		}
+
+		response, err := c.SearchClient.SearchResources(context.Background(), request)
+		logErrAndContinue(err)
+
+		result.Items = append(result.Items, response.Items...)
 	}
 
-	request := resourcesearch.SearchResourcesRequest{
-		SearchDetails: details,
-		Limit:         common.Int(1000),
-	}
-
-	response, err := c.SearchClient.SearchResources(context.Background(), request)
-	logErrAndContinue(err)
-
-	return response.ResourceSummaryCollection
+	return result
 }
 
 // handlers check for license type and change if incorrect license is found. Returns

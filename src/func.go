@@ -60,6 +60,7 @@ func myHandler(ctx context.Context, in io.Reader, out io.Writer) {
 	}
 
 	msg := clients.NewClientBundle(provider, regions.Items).ProcessCollection()
+	logger.Info(msg)
 
 	json.NewEncoder(out).Encode(msg)
 }

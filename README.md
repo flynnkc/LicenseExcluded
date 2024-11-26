@@ -1,6 +1,6 @@
 # License Excluded
 
-This project is intended to manage licenses in [Oracle Cloud Infrastructure](https://www.oracle.com/cloud/) (OCI). Licenses can be either included as a part of the cost of OCI services, or existing licenses can be used with the "Bring Your Own License" option. If you have enough licenses available, there is no good reason to select "License Included", but it's a common mistake.
+This project is intended to manage licenses in [Oracle Cloud Infrastructure](https://www.oracle.com/cloud/) (OCI). Licenses can be either included as a part of the cost of OCI services, or existing licenses can be used with the "Bring Your Own License" option. If you have enough licenses available there is no good reason to select "License Included", but it's a common mistake.
 
 This project switches licensing on select services from License Included to BYOL.
 
