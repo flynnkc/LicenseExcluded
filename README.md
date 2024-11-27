@@ -12,6 +12,7 @@ This project switches licensing on select services from License Included to BYOL
 - Autonomous Database
 - Oracle Base Database
 - Analytics Cloud Instances
+- Oracle Integration Instances
 
 ## Architecture
 

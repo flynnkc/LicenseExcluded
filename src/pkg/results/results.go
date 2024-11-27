@@ -1,6 +1,9 @@
 package results
 
-import "sync"
+import (
+	"encoding/json"
+	"sync"
+)
 
 type Result struct {
 	Message    string `json:"message,omitempty"`
@@ -32,4 +35,13 @@ func (r *Result) SetMessage(msg string) {
 	r.Lock()
 	defer r.Unlock()
 	r.Message = msg
+}
+
+func (r *Result) JsonEncode() string {
+	b, err := json.Marshal(r)
+	if err != nil {
+		return "Error marshaling results into JSON"
+	}
+
+	return string(b)
 }
