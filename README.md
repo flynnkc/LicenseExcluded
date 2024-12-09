@@ -18,6 +18,8 @@ This project switches licensing on select services from License Included to BYOL
 
 This script is meant to be run in an [OCI Function](https://docs.oracle.com/en-us/iaas/Content/Functions/Concepts/functionsoverview.htm). Funcions are serverless tools that are useful for short jobs. In addition, it prevents needing to store long-lived credentials as the Function will be able to dynamically retrive access tokens when needed.
 
+![Deployment Architecure](./images/deployment-architecture.png)
+
 ### Terraform Deployment
 
 See the [README](deploy/README.md) in *deploy* to create the stack with [Terraform](https://www.terraform.io/)/[OpenTofu](https://opentofu.org/).

@@ -1,6 +1,6 @@
 schema_version: 20180708
 name: licenseexcluded
-version: 0.1.13
+version: 0.1.14
 runtime: go
 build_image: fnproject/go:1.19-dev
 run_image: fnproject/go:1.19

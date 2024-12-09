@@ -1,28 +1,21 @@
-variable "tenancy_ocid" {
-  type = string
-}
+variable "tenancy_ocid" {}
 
 variable "user_ocid" {
-  type = string
-}
-
-variable "private_key_path" {
-  type = string
-}
-
-variable "fingerprint" {
-  type = string
-}
-
-variable "private_key_password" {
-  type    = string
   default = ""
 }
 
-variable "compartment_id" {
-  type = string
+variable "private_key_path" {
+  default = ""
 }
 
-variable "home_region" {
-  type = string
+variable "fingerprint" {
+  default = ""
 }
+
+variable "private_key_password" {
+  default = ""
+}
+
+variable "compartment_id" {}
+
+variable "region" {}

@@ -1,0 +1,49 @@
+# Project info
+title: LicenseExcluded Function Stack
+description: Deploy LicenseExcluded function to change licenses on resources from license included to bring your own license
+informationalText: Deploy LicenseExcluded function to change licenses on resources from license included to bring your own license
+schemaVersion: 1.1.0
+version: "20190304"
+locale: "en"
+
+variables:
+  # Hidden
+  tenancy_ocid:
+    type: string
+  
+  fingerprint:
+    type: string
+
+  user_ocid:
+    type: string
+
+  private_key_path:
+    type: string
+
+  private_key_password:
+    type: string
+
+  region:
+    type: oci:identity:region:name
+    required: true
+
+  # User selected
+  compartment_id:
+    type: oci:identity:compartment:id
+    required: true
+
+variableGroups:
+- title: Hidden
+  visible: false
+  variables:
+  - tenancy_ocid
+  - fingerprint
+  - user_ocid
+  - private_key_path
+  - private_key_password
+  - region
+
+- title: General Variables
+  visible: true
+  variables:
+  - compartment_id

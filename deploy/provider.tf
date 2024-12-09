@@ -14,7 +14,7 @@ provider "oci" {
   private_key_path     = var.private_key_path
   fingerprint          = var.fingerprint
   private_key_password = var.private_key_password
-  region               = var.home_region
+  region               = local.regions_map[local.home_region_key]
 }
 
 terraform {
