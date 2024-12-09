@@ -2,7 +2,7 @@ package clients
 
 import (
 	"context"
-	"encoding/json"
+	"func/pkg/clients/collection"
 	"func/pkg/logging"
 	"func/pkg/results"
 	"os"
@@ -37,11 +37,6 @@ type RegionalClient struct {
 }
 
 type ClientBundle map[string]RegionalClient
-
-type SearchCollection struct {
-	Items map[string]resourcesearch.ResourceSummaryCollection
-	sync.Mutex
-}
 
 func NewRegionalClient(p common.ConfigurationProvider) RegionalClient {
 
@@ -93,9 +88,7 @@ func (c ClientBundle) ProcessCollection() *results.Result {
 
 	var wg sync.WaitGroup
 
-	sc := SearchCollection{
-		Items: make(map[string]resourcesearch.ResourceSummaryCollection),
-	}
+	sc := collection.NewSearchCollection()
 	result := results.NewResult()
 
 	logger.Debugf("Searching %v regions with queries:\n\t%s\n\t%s\n\t%s\n",
@@ -119,11 +112,7 @@ func (c ClientBundle) ProcessCollection() *results.Result {
 	wg.Wait()
 
 	if logger.Level == logging.DEBUG {
-		b, err := json.Marshal(&sc)
-		if err != nil {
-			logger.Error("Error marshalling search collection into json")
-		}
-		logger.Debugf("Items returned: %v", string(b))
+		logger.Debugf("Items returned: %v", sc.JsonEncode())
 	}
 
 	for region, items := range sc.Items {
