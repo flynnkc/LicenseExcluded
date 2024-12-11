@@ -1,8 +1,10 @@
 # Deploy LicenseExcluded with Terraform
 
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=us-ashburn-1&zipUrl=https://github.com/flynnkc/LicenseExcluded/releases/download/0.1.14/release-0.1.14.zip)
+
 ## Requirements
 
-A region subscription to the **Ashburn/us-ashburn-1/iad** region
+- A region subscription to the **Ashburn/us-ashburn-1/iad** region
 
 ## Instructions
 
@@ -22,6 +24,8 @@ A region subscription to the **Ashburn/us-ashburn-1/iad** region
 ## End State
 
 Resources display name *LicenseExcluded\<Resource>*
+
+![Deployment Architecture](../images/deployment-architecture.png)
 
 - Function Application
 - Function

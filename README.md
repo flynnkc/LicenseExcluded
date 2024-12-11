@@ -1,5 +1,7 @@
 # License Excluded
 
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?region=us-ashburn-1&zipUrl=https://github.com/flynnkc/LicenseExcluded/releases/download/0.1.14/release-0.1.14.zip)
+
 This project is intended to manage licenses in [Oracle Cloud Infrastructure](https://www.oracle.com/cloud/) (OCI). Licenses can be either included as a part of the cost of OCI services, or existing licenses can be used with the "Bring Your Own License" option. If you have enough licenses available there is no good reason to select "License Included", but it's a common mistake.
 
 This project switches licensing on select services from License Included to BYOL.
