@@ -25,7 +25,7 @@ func myHandler(ctx context.Context, in io.Reader, out io.Writer) {
 	provider, err := auth.ResourcePrincipalConfigurationProvider()
 	if err != nil {
 		s := fmt.Sprintf("Error getting Resource Principal provider: %v", err)
-		logger.Critical(s)
+		logger.Error(s)
 		sendError(out, s)
 		return
 	}
@@ -33,7 +33,7 @@ func myHandler(ctx context.Context, in io.Reader, out io.Writer) {
 	c, err := identity.NewIdentityClientWithConfigurationProvider(provider)
 	if err != nil {
 		s := fmt.Sprintf("Error getting Identity client: %v", err)
-		logger.Critical(s)
+		logger.Error(s)
 		sendError(out, s)
 		return
 	}
@@ -41,32 +41,41 @@ func myHandler(ctx context.Context, in io.Reader, out io.Writer) {
 	tenantOcid, err := provider.TenancyOCID()
 	if err != nil {
 		s := fmt.Sprintf("Error getting tenant OCID: %v", err)
-		logger.Critical(s)
+		logger.Error(s)
 		sendError(out, s)
 		return
 	}
 
 	regions, err := c.ListRegionSubscriptions(
-		context.Background(),
+		ctx,
 		identity.ListRegionSubscriptionsRequest{
 			TenancyId: &tenantOcid,
 		},
 	)
 	if err != nil {
 		s := fmt.Sprintf("Error getting regions subscription: %v", err)
-		logger.Critical(s)
+		logger.Error(s)
 		sendError(out, s)
 		return
 	}
 
-	msg := clients.NewClientBundle(provider, regions.Items).ProcessCollection()
-	logger.Info(msg.JsonEncode())
+	bundle, errs := clients.NewClientBundle(regions.Items)
+	msg := bundle.ProcessCollection(ctx)
+	for _, err := range errs {
+		logger.Error("client bundle setup failed", "error", err)
+		msg.AddFailures(1)
+	}
+	logger.Info("invoke complete", "result", msg.JsonEncode())
 
-	json.NewEncoder(out).Encode(msg)
+	if err := json.NewEncoder(out).Encode(msg); err != nil {
+		logger.Error("failed to write response", "error", err)
+	}
 }
 
 func sendError(out io.Writer, message string) {
 	msg := results.Result{Error: message}
 
-	json.NewEncoder(out).Encode(&msg)
+	if err := json.NewEncoder(out).Encode(&msg); err != nil {
+		logging.NewLogger(os.Getenv("LOG_LEVEL")).Error("failed to write error response", "error", err)
+	}
 }

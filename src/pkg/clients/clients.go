@@ -1,11 +1,17 @@
 package clients
 
 import (
+	"cmp"
 	"context"
+	"fmt"
 	"func/pkg/clients/collection"
 	"func/pkg/logging"
 	"func/pkg/results"
+	"log/slog"
+	"maps"
+	"net/http"
 	"os"
+	"slices"
 	"sync"
 
 	"github.com/oracle/oci-go-sdk/v65/analytics"
@@ -18,16 +24,19 @@ import (
 )
 
 const (
-	query string = `query autonomousdatabase, analyticsinstance resources 
-	where lifeCycleState = 'RUNNING' || lifeCycleState = 'STOPPED' || lifeCycleState = 'AVAILABLE' 
+	query string = `query autonomousdatabase, analyticsinstance resources
+	where lifeCycleState = 'RUNNING' || lifeCycleState = 'STOPPED' || lifeCycleState = 'AVAILABLE'
 	|| lifeCycleState = 'ACTIVE' || lifeCycleState = 'INACTIVE'`
-	dbQuery string = `query dbsystem resources where lifeCycleState = 'AVAILABLE' && 
+	dbQuery string = `query dbsystem resources where lifeCycleState = 'AVAILABLE' &&
 	licenseType = 'LICENSE_INCLUDED'`
-	integrationQuery string = `query integrationinstance resources 
+	integrationQuery string = `query integrationinstance resources
 	where isbyol = 'false' && lifeCycleState = 'ACTIVE'`
+
+	searchLimit         = 1000
+	maxConcurrentUpdate = 10
 )
 
-var logger logging.Lumberjack = logging.NewLogger(os.Getenv("LOG_LEVEL"))
+var logger *slog.Logger = logging.NewLogger(os.Getenv("LOG_LEVEL"))
 
 type RegionalClient struct {
 	AnalyticsClient   analytics.AnalyticsClient
@@ -38,289 +47,351 @@ type RegionalClient struct {
 
 type ClientBundle map[string]RegionalClient
 
-func NewRegionalClient(p common.ConfigurationProvider) RegionalClient {
-
+func NewRegionalClient(p common.ConfigurationProvider) (RegionalClient, error) {
 	ac, err := analytics.NewAnalyticsClientWithConfigurationProvider(p)
-	logErrAndContinue(err)
+	if err != nil {
+		return RegionalClient{}, fmt.Errorf("create analytics client: %w", err)
+	}
 
 	dc, err := database.NewDatabaseClientWithConfigurationProvider(p)
-	logErrAndContinue(err)
+	if err != nil {
+		return RegionalClient{}, fmt.Errorf("create database client: %w", err)
+	}
 
 	sc, err := resourcesearch.NewResourceSearchClientWithConfigurationProvider(p)
-	logErrAndContinue(err)
+	if err != nil {
+		return RegionalClient{}, fmt.Errorf("create resource search client: %w", err)
+	}
 
 	ic, err := integration.NewIntegrationInstanceClientWithConfigurationProvider(p)
-	logErrAndContinue(err)
+	if err != nil {
+		return RegionalClient{}, fmt.Errorf("create integration client: %w", err)
+	}
 
 	return RegionalClient{
 		AnalyticsClient:   ac,
 		DatabaseClient:    dc,
 		SearchClient:      sc,
 		IntegrationClient: ic,
-	}
+	}, nil
 }
 
-// NewClientBundle takes a ConfigurationProvider and a list of regions, creates clients for each region,
-// and returns them as a bundle.
-func NewClientBundle(p common.ConfigurationProvider, regions []identity.RegionSubscription) ClientBundle {
-	logger.Debug("Making new client bundles")
-	logger.Debug("Regions:", regions)
+func NewClientBundle(regions []identity.RegionSubscription) (ClientBundle, []error) {
+	logger.Debug("making client bundle", "regions", len(regions))
 
 	cb := make(ClientBundle)
+	var errs []error
 
 	for _, r := range regions {
-		newProvider, err := auth.ResourcePrincipalConfigurationProviderForRegion(common.StringToRegion(*r.RegionName))
-		if err != nil {
-			logger.Errorf("Problem with client bundle provider: %v\n", err)
+		if r.RegionName == nil || *r.RegionName == "" {
+			errs = append(errs, fmt.Errorf("region subscription missing region name"))
 			continue
 		}
 
-		cb[*r.RegionName] = NewRegionalClient(newProvider)
+		regionName := *r.RegionName
+		newProvider, err := auth.ResourcePrincipalConfigurationProviderForRegion(common.StringToRegion(regionName))
+		if err != nil {
+			errs = append(errs, fmt.Errorf("create provider for region %s: %w", regionName, err))
+			continue
+		}
+
+		client, err := NewRegionalClient(newProvider)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("create clients for region %s: %w", regionName, err))
+			continue
+		}
+
+		cb[regionName] = client
 	}
 
-	logger.Debug("Client bundles assembled")
-	return cb
+	logger.Debug("client bundle assembled", "regions", len(cb), "failures", len(errs))
+	return cb, errs
 }
 
-// ProcessCollection fans out on returned resources
-func (c ClientBundle) ProcessCollection() *results.Result {
-	logger.Debug("Processing resource collection")
+func (c ClientBundle) ProcessCollection(ctx context.Context) *results.Result {
+	logger.Debug("processing resource collection")
 
 	var wg sync.WaitGroup
-
 	sc := collection.NewSearchCollection()
 	result := results.NewResult()
 
-	logger.Debugf("Searching %v regions with queries:\n\t%s\n\t%s\n\t%s\n",
-		len(c), query, dbQuery, integrationQuery)
-	for region, client := range c {
-		logger.Debug("Searching in", region)
+	logger.Debug(
+		"searching regions",
+		"regions", len(c),
+		"queries", []string{query, dbQuery, integrationQuery},
+	)
+	for _, region := range sortedKeys(c) {
+		client := c[region]
 		wg.Add(1)
-		go func(client RegionalClient, region string, result *results.Result) {
+		go func(client RegionalClient, region string) {
 			defer wg.Done()
-			rc := client.Search()
-			logger.Infof("Found %v resources in %v\n", len(rc.Items), region)
+
+			rc, err := client.Search(ctx, region)
+			if err != nil {
+				logger.Error("search failed", "region", region, "error", err)
+				result.AddFailures(1)
+				return
+			}
+
+			logger.Info("search complete", "region", region, "items_found", len(rc.Items))
 
 			sc.Lock()
 			defer sc.Unlock()
 
 			sc.Items[region] = rc
 			result.AddItemsFound(len(rc.Items))
-		}(client, region, &result)
+		}(client, region)
 	}
 
 	wg.Wait()
 
-	if logger.Level == logging.DEBUG {
-		logger.Debugf("Items returned: %v", sc.JsonEncode())
+	if logger.Enabled(ctx, slog.LevelDebug) {
+		logger.Debug("items returned", "items", sc.JsonEncode())
 	}
 
-	for region, items := range sc.Items {
+	type updateJob struct {
+		item         resourcesearch.ResourceSummary
+		region       string
+		resourceType string
+		resourceID   string
+	}
+
+	jobs := make(chan updateJob)
+	var updateWG sync.WaitGroup
+	for range maxConcurrentUpdate {
+		updateWG.Add(1)
+		go func() {
+			defer updateWG.Done()
+			for job := range jobs {
+				changed, err := c[job.region].handleResource(ctx, job.item, job.region, job.resourceType, job.resourceID)
+				if err != nil {
+					logger.Error(
+						"resource update failed",
+						"region", job.region,
+						"resource_type", job.resourceType,
+						"resource_id", job.resourceID,
+						"error", err,
+					)
+					result.AddFailures(1)
+					continue
+				}
+				if changed {
+					result.AddChanges(1)
+				}
+			}
+		}()
+	}
+
+	for _, region := range sortedKeys(sc.Items) {
+		items := sc.Items[region]
 		for _, item := range items.Items {
-			switch *item.ResourceType {
-			case "DbSystem":
-				wg.Add(1)
-				go func(item resourcesearch.ResourceSummary, region string, result *results.Result) {
-					defer wg.Done()
-					if c[region].handleDbSystem(item) {
-						result.AddChanges(1)
-					}
-				}(item, region, &result)
+			resourceType, resourceID, ok := resourceSummaryFields(item)
+			if !ok {
+				logger.Warn("skipping malformed search result", "region", region, "resource_type", resourceType, "resource_id", resourceID)
+				result.AddSkipped(1)
+				continue
+			}
 
-			case "AutonomousDatabase":
-				wg.Add(1)
-				go func(item resourcesearch.ResourceSummary, region string, result *results.Result) {
-					defer wg.Done()
-					if c[region].handleAutonomousDatabase(item) {
-						result.AddChanges(1)
-					}
-				}(item, region, &result)
-
-			case "AnalyticsInstance":
-				wg.Add(1)
-				go func(item resourcesearch.ResourceSummary, region string, result *results.Result) {
-					defer wg.Done()
-					if c[region].handleAnalyticsInstance(item) {
-						result.AddChanges(1)
-					}
-				}(item, region, &result)
-
-			case "IntegrationInstance":
-				wg.Add(1)
-				go func(item resourcesearch.ResourceSummary, region string, result *results.Result) {
-					defer wg.Done()
-					if c[region].handleIntegrationInstance(item) {
-						result.AddChanges(1)
-					}
-				}(item, region, &result)
-
-			default:
-				logger.Warn("Error: No supported type", *item.ResourceType)
+			jobs <- updateJob{
+				item:         item,
+				region:       region,
+				resourceType: resourceType,
+				resourceID:   resourceID,
 			}
 		}
 	}
 
-	wg.Wait()
+	close(jobs)
+	updateWG.Wait()
 
 	result.SetMessage("LicenseExcluded invoke complete")
 
 	return &result
 }
 
-// Search uses the search client to find resources.
-func (c *RegionalClient) Search() resourcesearch.ResourceSummaryCollection {
-
+func (c *RegionalClient) Search(ctx context.Context, region string) (resourcesearch.ResourceSummaryCollection, error) {
 	result := resourcesearch.ResourceSummaryCollection{Items: make([]resourcesearch.ResourceSummary, 0)}
 
 	for _, q := range []string{query, dbQuery, integrationQuery} {
+		page := ""
+		for {
+			request := resourcesearch.SearchResourcesRequest{
+				SearchDetails: resourcesearch.StructuredSearchDetails{
+					Query: common.String(q),
+				},
+				Limit: common.Int(searchLimit),
+			}
+			if page != "" {
+				request.Page = common.String(page)
+			}
 
-		details := resourcesearch.StructuredSearchDetails{
-			Query: common.String(q),
+			response, err := c.SearchClient.SearchResources(ctx, request)
+			if err != nil {
+				return result, fmt.Errorf("search resources in %s: %w", region, err)
+			}
+
+			result.Items = append(result.Items, response.Items...)
+
+			if response.OpcNextPage == nil || *response.OpcNextPage == "" {
+				break
+			}
+			page = *response.OpcNextPage
 		}
-
-		request := resourcesearch.SearchResourcesRequest{
-			SearchDetails: details,
-			Limit:         common.Int(1000),
-		}
-
-		response, err := c.SearchClient.SearchResources(context.Background(), request)
-		logErrAndContinue(err)
-
-		result.Items = append(result.Items, response.Items...)
 	}
 
-	return result
+	return result, nil
 }
 
-// handlers check for license type and change if incorrect license is found. Returns
-// true to signal that a change was made.
-func (c RegionalClient) handleAutonomousDatabase(adb resourcesearch.ResourceSummary) bool {
-	logger.Debugf("Handling Autonomous Database %v\n", *adb.Identifier)
-	request := database.GetAutonomousDatabaseRequest{
+func (c RegionalClient) handleResource(ctx context.Context, item resourcesearch.ResourceSummary, region, resourceType, resourceID string) (bool, error) {
+	switch resourceType {
+	case "DbSystem":
+		return c.handleDbSystem(ctx, item, region, resourceID)
+	case "AutonomousDatabase":
+		return c.handleAutonomousDatabase(ctx, item, region, resourceID)
+	case "AnalyticsInstance":
+		return c.handleAnalyticsInstance(ctx, item, region, resourceID)
+	case "IntegrationInstance":
+		return c.handleIntegrationInstance(ctx, item, region, resourceID)
+	default:
+		logger.Warn("unsupported resource type", "region", region, "resource_type", resourceType, "resource_id", resourceID)
+		return false, nil
+	}
+}
+
+func (c RegionalClient) handleAutonomousDatabase(ctx context.Context, adb resourcesearch.ResourceSummary, region, resourceID string) (bool, error) {
+	logger.Debug("handling autonomous database", "region", region, "resource_id", resourceID)
+
+	response, err := c.DatabaseClient.GetAutonomousDatabase(ctx, database.GetAutonomousDatabaseRequest{
 		AutonomousDatabaseId: adb.Identifier,
-	}
-	response, err := c.DatabaseClient.GetAutonomousDatabase(context.Background(), request)
+	})
 	if err != nil {
-		logger.Errorf("Error handling Autonomous Database %v, %v\n", *adb.Identifier, err)
-		return false
+		return false, fmt.Errorf("get autonomous database: %w", err)
+	}
+	if response.AutonomousDatabase.IsFreeTier != nil && *response.AutonomousDatabase.IsFreeTier {
+		logger.Debug("skipping free-tier autonomous database", "region", region, "resource_id", resourceID)
+		return false, nil
 	}
 
-	// Exclusive to Autonomous Database
-	if *response.AutonomousDatabase.IsFreeTier {
-		logger.Debugf("%v is free tier, skipping", *adb.Identifier)
-		return false
+	if response.AutonomousDatabase.LicenseModel != database.AutonomousDatabaseLicenseModelLicenseIncluded {
+		return false, nil
 	}
 
-	if response.AutonomousDatabase.LicenseModel == database.AutonomousDatabaseLicenseModelLicenseIncluded {
-		logger.Infof("%v - Changing from License Included to BYOL\n", *adb.Identifier)
-		req := database.UpdateAutonomousDatabaseRequest{
-			AutonomousDatabaseId: adb.Identifier,
-			UpdateAutonomousDatabaseDetails: database.UpdateAutonomousDatabaseDetails{
-				LicenseModel:    database.UpdateAutonomousDatabaseDetailsLicenseModelBringYourOwnLicense,
-				DatabaseEdition: database.AutonomousDatabaseSummaryDatabaseEditionEnterpriseEdition,
-			},
-		}
-
-		resp, err := c.DatabaseClient.UpdateAutonomousDatabase(context.Background(), req)
-		if err != nil {
-			logger.Errorf("Error updating Autonomous Database %v, %v\n", *adb.Identifier, err)
-		} else if resp.RawResponse.StatusCode != 200 {
-			logger.Errorf("Non-200 status code returned %v - %v\n", resp.RawResponse.Status, *adb.Identifier)
-		} else {
-			logger.Debugf("Updated Autonomous Database %v\n", *adb.Identifier)
-			return true
-		}
+	logger.Info("changing autonomous database license to BYOL", "region", region, "resource_id", resourceID)
+	resp, err := c.DatabaseClient.UpdateAutonomousDatabase(ctx, database.UpdateAutonomousDatabaseRequest{
+		AutonomousDatabaseId: adb.Identifier,
+		UpdateAutonomousDatabaseDetails: database.UpdateAutonomousDatabaseDetails{
+			LicenseModel:    database.UpdateAutonomousDatabaseDetailsLicenseModelBringYourOwnLicense,
+			DatabaseEdition: database.AutonomousDatabaseSummaryDatabaseEditionEnterpriseEdition,
+		},
+	})
+	if err != nil {
+		return false, fmt.Errorf("update autonomous database: %w", err)
 	}
-	return false
+	if !statusOK(resp.RawResponse, http.StatusOK) {
+		return false, fmt.Errorf("update autonomous database returned %s", responseStatus(resp.RawResponse))
+	}
+
+	logger.Debug("updated autonomous database", "region", region, "resource_id", resourceID)
+	return true, nil
 }
 
-// Handle DbSystem updates
-func (c RegionalClient) handleDbSystem(db resourcesearch.ResourceSummary) bool {
-	logger.Debugf("Handling DBSystem %v\n", *db.Identifier)
+func (c RegionalClient) handleDbSystem(ctx context.Context, db resourcesearch.ResourceSummary, region, resourceID string) (bool, error) {
+	logger.Debug("handling DB system", "region", region, "resource_id", resourceID)
+	logger.Info("changing DB system license to BYOL", "region", region, "resource_id", resourceID)
 
-	// Don't need to check for license because query only returns license included systems
-	logger.Infof("%v - Changing from License Included to BYOL\n", *db.Identifier)
-	req := database.UpdateDbSystemRequest{
+	resp, err := c.DatabaseClient.UpdateDbSystem(ctx, database.UpdateDbSystemRequest{
 		DbSystemId: db.Identifier,
 		UpdateDbSystemDetails: database.UpdateDbSystemDetails{
 			LicenseModel: database.UpdateDbSystemDetailsLicenseModelBringYourOwnLicense,
 		},
-	}
-
-	resp, err := c.DatabaseClient.UpdateDbSystem(context.Background(), req)
+	})
 	if err != nil {
-		logger.Errorf("Error updating DBSystem %v, %v\n", *db.Identifier, err)
-	} else if resp.RawResponse.StatusCode != 200 {
-		logger.Errorf("Non-200 status code returned %v - %v\n", resp.RawResponse.Status, *db.Identifier)
-	} else {
-		logger.Debugf("Updated DBSystem %v\n", *db.Identifier)
-		return true
+		return false, fmt.Errorf("update DB system: %w", err)
+	}
+	if !statusOK(resp.RawResponse, http.StatusOK) {
+		return false, fmt.Errorf("update DB system returned %s", responseStatus(resp.RawResponse))
 	}
 
-	return false
+	logger.Debug("updated DB system", "region", region, "resource_id", resourceID)
+	return true, nil
 }
 
-func (c RegionalClient) handleAnalyticsInstance(ai resourcesearch.ResourceSummary) bool {
-	logger.Debugf("Handling Analytics Instance %v\n", *ai.Identifier)
-	request := analytics.GetAnalyticsInstanceRequest{
+func (c RegionalClient) handleAnalyticsInstance(ctx context.Context, ai resourcesearch.ResourceSummary, region, resourceID string) (bool, error) {
+	logger.Debug("handling analytics instance", "region", region, "resource_id", resourceID)
+
+	response, err := c.AnalyticsClient.GetAnalyticsInstance(ctx, analytics.GetAnalyticsInstanceRequest{
 		AnalyticsInstanceId: ai.Identifier,
-	}
-
-	response, err := c.AnalyticsClient.GetAnalyticsInstance(context.Background(), request)
+	})
 	if err != nil {
-		logger.Errorf("Error handling AnalyticsInstance %v, %v\n", *ai.Identifier, err)
-		return false
+		return false, fmt.Errorf("get analytics instance: %w", err)
+	}
+	if response.AnalyticsInstance.LicenseType != analytics.LicenseTypeLicenseIncluded {
+		return false, nil
 	}
 
-	if response.AnalyticsInstance.LicenseType == analytics.LicenseTypeLicenseIncluded {
-		logger.Infof("%v - Changing from License Included to BYOL\n", *ai.Identifier)
-		req := analytics.UpdateAnalyticsInstanceRequest{
-			AnalyticsInstanceId: ai.Identifier,
-			UpdateAnalyticsInstanceDetails: analytics.UpdateAnalyticsInstanceDetails{
-				LicenseType: analytics.LicenseTypeBringYourOwnLicense,
-			},
-		}
-
-		resp, err := c.AnalyticsClient.UpdateAnalyticsInstance(context.Background(), req)
-		if err != nil {
-			logger.Errorf("Error updating AnalyticsInstance %v, %v\n", *ai.Identifier, err)
-		} else if resp.RawResponse.StatusCode != 200 {
-			logger.Errorf("Non-200 status code returned %v - %v\n", resp.RawResponse.Status, *ai.Identifier)
-		} else {
-			logger.Debugf("Updated AnalyticsInstance %v\n", *ai.Identifier)
-			return true
-		}
+	logger.Info("changing analytics instance license to BYOL", "region", region, "resource_id", resourceID)
+	resp, err := c.AnalyticsClient.UpdateAnalyticsInstance(ctx, analytics.UpdateAnalyticsInstanceRequest{
+		AnalyticsInstanceId: ai.Identifier,
+		UpdateAnalyticsInstanceDetails: analytics.UpdateAnalyticsInstanceDetails{
+			LicenseType: analytics.LicenseTypeBringYourOwnLicense,
+		},
+	})
+	if err != nil {
+		return false, fmt.Errorf("update analytics instance: %w", err)
 	}
-	return false
+	if !statusOK(resp.RawResponse, http.StatusOK) {
+		return false, fmt.Errorf("update analytics instance returned %s", responseStatus(resp.RawResponse))
+	}
+
+	logger.Debug("updated analytics instance", "region", region, "resource_id", resourceID)
+	return true, nil
 }
 
-func (c RegionalClient) handleIntegrationInstance(i resourcesearch.ResourceSummary) bool {
-	logger.Debugf("Handling Integration Instance %v\n", *i.Identifier)
+func (c RegionalClient) handleIntegrationInstance(ctx context.Context, i resourcesearch.ResourceSummary, region, resourceID string) (bool, error) {
+	logger.Debug("handling integration instance", "region", region, "resource_id", resourceID)
+	logger.Info("changing integration instance license to BYOL", "region", region, "resource_id", resourceID)
 
-	// Don't need to check for byol as search only returns license included instances
-	req := integration.UpdateIntegrationInstanceRequest{
+	resp, err := c.IntegrationClient.UpdateIntegrationInstance(ctx, integration.UpdateIntegrationInstanceRequest{
 		IntegrationInstanceId: i.Identifier,
 		UpdateIntegrationInstanceDetails: integration.UpdateIntegrationInstanceDetails{
 			IsByol: common.Bool(true),
 		},
-	}
-
-	resp, err := c.IntegrationClient.UpdateIntegrationInstance(context.Background(), req)
+	})
 	if err != nil {
-		logger.Errorf("Error updating IntegrationInstance %v, %v\n", *i.Identifier, err)
-	} else if resp.RawResponse.StatusCode != 202 {
-		logger.Errorf("Non-20X status code returned %v - %v\n", resp.RawResponse.Status, *i.Identifier)
-	} else {
-		logger.Debugf("Updated IntegrationInstance %v\n", *i.Identifier)
-		return true
+		return false, fmt.Errorf("update integration instance: %w", err)
+	}
+	if !statusOK(resp.RawResponse, http.StatusAccepted) {
+		return false, fmt.Errorf("update integration instance returned %s", responseStatus(resp.RawResponse))
 	}
 
-	return false
+	logger.Debug("updated integration instance", "region", region, "resource_id", resourceID)
+	return true, nil
 }
 
-// Logs error if not nil and moves on without stopping execution
-func logErrAndContinue(err error) {
-	if err != nil {
-		logger.Error(err)
+func resourceSummaryFields(item resourcesearch.ResourceSummary) (string, string, bool) {
+	resourceType := ""
+	resourceID := ""
+	if item.ResourceType != nil {
+		resourceType = *item.ResourceType
 	}
+	if item.Identifier != nil {
+		resourceID = *item.Identifier
+	}
+
+	return resourceType, resourceID, resourceType != "" && resourceID != ""
+}
+
+func statusOK(resp *http.Response, expected int) bool {
+	return resp != nil && resp.StatusCode == expected
+}
+
+func responseStatus(resp *http.Response) string {
+	if resp == nil {
+		return "nil response"
+	}
+	return resp.Status
+}
+
+func sortedKeys[M ~map[K]V, K cmp.Ordered, V any](m M) []K {
+	return slices.Sorted(maps.Keys(m))
 }

@@ -10,6 +10,8 @@ type Result struct {
 	Error      string `json:"error,omitempty"`
 	ItemsFound int    `json:"items_found,omitempty"`
 	Changes    int    `json:"license_changes,omitempty"`
+	Failures   int    `json:"failures,omitempty"`
+	Skipped    int    `json:"skipped,omitempty"`
 	sync.Mutex
 }
 
@@ -29,6 +31,18 @@ func (r *Result) AddItemsFound(n int) {
 	r.Lock()
 	defer r.Unlock()
 	r.ItemsFound += n
+}
+
+func (r *Result) AddFailures(n int) {
+	r.Lock()
+	defer r.Unlock()
+	r.Failures += n
+}
+
+func (r *Result) AddSkipped(n int) {
+	r.Lock()
+	defer r.Unlock()
+	r.Skipped += n
 }
 
 func (r *Result) SetMessage(msg string) {

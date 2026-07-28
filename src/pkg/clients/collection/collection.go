@@ -3,6 +3,7 @@ package collection
 import (
 	"encoding/json"
 	"func/pkg/logging"
+	"log/slog"
 	"os"
 	"sync"
 
@@ -14,7 +15,7 @@ type SearchCollection struct {
 	sync.Mutex
 }
 
-var logger logging.Lumberjack = logging.NewLogger(os.Getenv("LOG_LEVEL"))
+var logger *slog.Logger = logging.NewLogger(os.Getenv("LOG_LEVEL"))
 
 func NewSearchCollection() *SearchCollection {
 	sc := SearchCollection{
@@ -27,7 +28,7 @@ func NewSearchCollection() *SearchCollection {
 func (sc *SearchCollection) JsonEncode() string {
 	b, err := json.Marshal(&sc)
 	if err != nil {
-		logger.Error("Error marshalling search collection into json")
+		logger.Error("error marshalling search collection into json", "error", err)
 		return "Err"
 	}
 
