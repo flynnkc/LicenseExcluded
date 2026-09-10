@@ -13,6 +13,10 @@ This project switches licensing on select services from License Included to BYOL
 
 - Autonomous Database
 - Oracle Base Database
+- Exadata Cloud Service VM Clusters
+- Exadata Cloud@Customer VM Clusters
+- Autonomous VM Clusters
+- Cloud Autonomous VM Clusters
 - Analytics Cloud Instances
 - Oracle Integration Instances
 
@@ -34,6 +38,11 @@ See the [README](deploy/README.md) in *deploy* to create the stack with [Terrafo
 1. Create a Dynamic Group with the function as a member
 1. Write Policies to allow the Function to interact with services
     - "Allow dynamic-group ${oci_identity_dynamic_group} to use autonomous-databases in tenancy"
+    - "Allow dynamic-group ${oci_identity_dynamic_group} to use autonomous-vmclusters in tenancy"
+    - "Allow dynamic-group ${oci_identity_dynamic_group} to use cloud-autonomous-vmclusters in tenancy"
+    - "Allow dynamic-group ${oci_identity_dynamic_group} to use cloud-vmclusters in tenancy"
+    - "Allow dynamic-group ${oci_identity_dynamic_group} to use integration-instance in tenancy"
+    - "Allow dynamic-group ${oci_identity_dynamic_group} to use vmclusters in tenancy"
     - "Allow dynamic-group ${oci_identity_dynamic_group} to manage db-systems in tenancy"
     - "Allow dynamic-group ${oci_identity_dynamic_group} to manage analytics-instance in tenancy where all {request.permission != 'ANALYTICS_INSTANCE_CREATE', request.permission != 'ANALYTICS_INSTANCE_DELETE', request.permission != 'ANALYTICS_INSTANCE_MOVE'}"
 1. Set up Resource Scheduler to invoke function on a schedule

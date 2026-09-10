@@ -31,6 +31,8 @@ const (
 	licenseType = 'LICENSE_INCLUDED'`
 	integrationQuery string = `query integrationinstance resources
 	where isbyol = 'false' && lifeCycleState = 'ACTIVE'`
+	clusterQuery string = `query cloudvmcluster, vmcluster, autonomousvmcluster, cloudautonomousvmcluster resources
+	where lifeCycleState = 'AVAILABLE'`
 
 	searchLimit         = 1000
 	maxConcurrentUpdate = 10
@@ -118,7 +120,7 @@ func (c ClientBundle) ProcessCollection(ctx context.Context) *results.Result {
 	logger.Debug(
 		"searching regions",
 		"regions", len(c),
-		"queries", []string{query, dbQuery, integrationQuery},
+		"queries", []string{query, dbQuery, integrationQuery, clusterQuery},
 	)
 	for _, region := range sortedKeys(c) {
 		client := c[region]
@@ -212,7 +214,7 @@ func (c ClientBundle) ProcessCollection(ctx context.Context) *results.Result {
 func (c *RegionalClient) Search(ctx context.Context, region string) (resourcesearch.ResourceSummaryCollection, error) {
 	result := resourcesearch.ResourceSummaryCollection{Items: make([]resourcesearch.ResourceSummary, 0)}
 
-	for _, q := range []string{query, dbQuery, integrationQuery} {
+	for _, q := range []string{query, dbQuery, integrationQuery, clusterQuery} {
 		page := ""
 		for {
 			request := resourcesearch.SearchResourcesRequest{
@@ -252,6 +254,14 @@ func (c RegionalClient) handleResource(ctx context.Context, item resourcesearch.
 		return c.handleAnalyticsInstance(ctx, item, region, resourceID)
 	case "IntegrationInstance":
 		return c.handleIntegrationInstance(ctx, item, region, resourceID)
+	case "CloudVmCluster":
+		return c.handleCloudVmCluster(ctx, item, region, resourceID)
+	case "VmCluster":
+		return c.handleVmCluster(ctx, item, region, resourceID)
+	case "AutonomousVmCluster":
+		return c.handleAutonomousVmCluster(ctx, item, region, resourceID)
+	case "CloudAutonomousVmCluster":
+		return c.handleCloudAutonomousVmCluster(ctx, item, region, resourceID)
 	default:
 		logger.Warn("unsupported resource type", "region", region, "resource_type", resourceType, "resource_id", resourceID)
 		return false, nil
@@ -368,6 +378,130 @@ func (c RegionalClient) handleIntegrationInstance(ctx context.Context, i resourc
 	return true, nil
 }
 
+func (c RegionalClient) handleCloudVmCluster(ctx context.Context, cluster resourcesearch.ResourceSummary, region, resourceID string) (bool, error) {
+	logger.Debug("handling cloud VM cluster", "region", region, "resource_id", resourceID)
+
+	response, err := c.DatabaseClient.GetCloudVmCluster(ctx, database.GetCloudVmClusterRequest{
+		CloudVmClusterId: cluster.Identifier,
+	})
+	if err != nil {
+		return false, fmt.Errorf("get cloud VM cluster: %w", err)
+	}
+	if response.CloudVmCluster.LicenseModel != database.CloudVmClusterLicenseModelLicenseIncluded {
+		return false, nil
+	}
+
+	logger.Info("changing cloud VM cluster license to BYOL", "region", region, "resource_id", resourceID)
+	resp, err := c.DatabaseClient.UpdateCloudVmCluster(ctx, database.UpdateCloudVmClusterRequest{
+		CloudVmClusterId: cluster.Identifier,
+		UpdateCloudVmClusterDetails: database.UpdateCloudVmClusterDetails{
+			LicenseModel: database.UpdateCloudVmClusterDetailsLicenseModelBringYourOwnLicense,
+		},
+	})
+	if err != nil {
+		return false, fmt.Errorf("update cloud VM cluster: %w", err)
+	}
+	if !statusOK(resp.RawResponse, http.StatusOK, http.StatusAccepted) {
+		return false, fmt.Errorf("update cloud VM cluster returned %s", responseStatus(resp.RawResponse))
+	}
+
+	logger.Debug("updated cloud VM cluster", "region", region, "resource_id", resourceID)
+	return true, nil
+}
+
+func (c RegionalClient) handleVmCluster(ctx context.Context, cluster resourcesearch.ResourceSummary, region, resourceID string) (bool, error) {
+	logger.Debug("handling VM cluster", "region", region, "resource_id", resourceID)
+
+	response, err := c.DatabaseClient.GetVmCluster(ctx, database.GetVmClusterRequest{
+		VmClusterId: cluster.Identifier,
+	})
+	if err != nil {
+		return false, fmt.Errorf("get VM cluster: %w", err)
+	}
+	if response.VmCluster.LicenseModel != database.VmClusterLicenseModelLicenseIncluded {
+		return false, nil
+	}
+
+	logger.Info("changing VM cluster license to BYOL", "region", region, "resource_id", resourceID)
+	resp, err := c.DatabaseClient.UpdateVmCluster(ctx, database.UpdateVmClusterRequest{
+		VmClusterId: cluster.Identifier,
+		UpdateVmClusterDetails: database.UpdateVmClusterDetails{
+			LicenseModel: database.UpdateVmClusterDetailsLicenseModelBringYourOwnLicense,
+		},
+	})
+	if err != nil {
+		return false, fmt.Errorf("update VM cluster: %w", err)
+	}
+	if !statusOK(resp.RawResponse, http.StatusOK, http.StatusAccepted) {
+		return false, fmt.Errorf("update VM cluster returned %s", responseStatus(resp.RawResponse))
+	}
+
+	logger.Debug("updated VM cluster", "region", region, "resource_id", resourceID)
+	return true, nil
+}
+
+func (c RegionalClient) handleAutonomousVmCluster(ctx context.Context, cluster resourcesearch.ResourceSummary, region, resourceID string) (bool, error) {
+	logger.Debug("handling autonomous VM cluster", "region", region, "resource_id", resourceID)
+
+	response, err := c.DatabaseClient.GetAutonomousVmCluster(ctx, database.GetAutonomousVmClusterRequest{
+		AutonomousVmClusterId: cluster.Identifier,
+	})
+	if err != nil {
+		return false, fmt.Errorf("get autonomous VM cluster: %w", err)
+	}
+	if response.AutonomousVmCluster.LicenseModel != database.AutonomousVmClusterLicenseModelLicenseIncluded {
+		return false, nil
+	}
+
+	logger.Info("changing autonomous VM cluster license to BYOL", "region", region, "resource_id", resourceID)
+	resp, err := c.DatabaseClient.UpdateAutonomousVmCluster(ctx, database.UpdateAutonomousVmClusterRequest{
+		AutonomousVmClusterId: cluster.Identifier,
+		UpdateAutonomousVmClusterDetails: database.UpdateAutonomousVmClusterDetails{
+			LicenseModel: database.UpdateAutonomousVmClusterDetailsLicenseModelBringYourOwnLicense,
+		},
+	})
+	if err != nil {
+		return false, fmt.Errorf("update autonomous VM cluster: %w", err)
+	}
+	if !statusOK(resp.RawResponse, http.StatusOK, http.StatusAccepted) {
+		return false, fmt.Errorf("update autonomous VM cluster returned %s", responseStatus(resp.RawResponse))
+	}
+
+	logger.Debug("updated autonomous VM cluster", "region", region, "resource_id", resourceID)
+	return true, nil
+}
+
+func (c RegionalClient) handleCloudAutonomousVmCluster(ctx context.Context, cluster resourcesearch.ResourceSummary, region, resourceID string) (bool, error) {
+	logger.Debug("handling cloud autonomous VM cluster", "region", region, "resource_id", resourceID)
+
+	response, err := c.DatabaseClient.GetCloudAutonomousVmCluster(ctx, database.GetCloudAutonomousVmClusterRequest{
+		CloudAutonomousVmClusterId: cluster.Identifier,
+	})
+	if err != nil {
+		return false, fmt.Errorf("get cloud autonomous VM cluster: %w", err)
+	}
+	if response.CloudAutonomousVmCluster.LicenseModel != database.CloudAutonomousVmClusterLicenseModelLicenseIncluded {
+		return false, nil
+	}
+
+	logger.Info("changing cloud autonomous VM cluster license to BYOL", "region", region, "resource_id", resourceID)
+	resp, err := c.DatabaseClient.UpdateCloudAutonomousVmCluster(ctx, database.UpdateCloudAutonomousVmClusterRequest{
+		CloudAutonomousVmClusterId: cluster.Identifier,
+		UpdateCloudAutonomousVmClusterDetails: database.UpdateCloudAutonomousVmClusterDetails{
+			LicenseModel: database.UpdateCloudAutonomousVmClusterDetailsLicenseModelBringYourOwnLicense,
+		},
+	})
+	if err != nil {
+		return false, fmt.Errorf("update cloud autonomous VM cluster: %w", err)
+	}
+	if !statusOK(resp.RawResponse, http.StatusOK, http.StatusAccepted) {
+		return false, fmt.Errorf("update cloud autonomous VM cluster returned %s", responseStatus(resp.RawResponse))
+	}
+
+	logger.Debug("updated cloud autonomous VM cluster", "region", region, "resource_id", resourceID)
+	return true, nil
+}
+
 func resourceSummaryFields(item resourcesearch.ResourceSummary) (string, string, bool) {
 	resourceType := ""
 	resourceID := ""
@@ -381,8 +515,16 @@ func resourceSummaryFields(item resourcesearch.ResourceSummary) (string, string,
 	return resourceType, resourceID, resourceType != "" && resourceID != ""
 }
 
-func statusOK(resp *http.Response, expected int) bool {
-	return resp != nil && resp.StatusCode == expected
+func statusOK(resp *http.Response, expected ...int) bool {
+	if resp == nil {
+		return false
+	}
+	for _, status := range expected {
+		if resp.StatusCode == status {
+			return true
+		}
+	}
+	return false
 }
 
 func responseStatus(resp *http.Response) string {
